@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        Log.v("test","MainActivity onCreate")
+        Log.v("test","MainActivity onCreate2")
 
         // 첫 실행 시 필수 권한 요청
         val perms = mutableListOf<String>()
