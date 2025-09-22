@@ -1,6 +1,7 @@
 package com.example.composeble.blelab.ble
 
 import kotlinx.coroutines.flow.Flow
+import java.util.UUID
 
 /**
  * BLE 상위 인터페이스.
@@ -13,12 +14,9 @@ interface BleClient {
         val rssi: Int?
     )
 
-    /** 광고 스캔 스트림 */
-    fun scan(): Flow<Device>
+    /** 광고 스캔 스트림 (선택적 Service UUID 필터) */
+    fun scan(serviceUuid: UUID? = null): Flow<Device>
 
-    /** 주소(또는 객체)로 연결 시도 */
     suspend fun connect(address: String): Result<Unit>
-
-    /** 연결 해제 */
     suspend fun disconnect(): Result<Unit>
 }

@@ -6,16 +6,20 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import java.util.UUID
 
 class AndroidBleClient(
     private val context: Context
@@ -38,31 +42,33 @@ class AndroidBleClient(
         }
     }
 
-    override fun scan(): Flow<BleClient.Device> = callbackFlow {
-        // 환경 덤프 로그
+    override fun scan(serviceUuid: UUID?): Flow<BleClient.Device> = callbackFlow {
         val hasScan = hasPermissionScan()
         val isBtOn = adapter?.isEnabled == true
-        Log.d("AndroidBleClient", "scan() start: hasScan=$hasScan, isBtOn=$isBtOn, sdk=${Build.VERSION.SDK_INT}")
+        Log.d("AndroidBleClient", "scan() start: hasScan=$hasScan, isBtOn=$isBtOn, filter=${serviceUuid ?: "none"}")
 
         if (!hasScan) {
-            val msg = "Missing permission: BLUETOOTH_SCAN(S+) or ACCESS_FINE_LOCATION(R-)"
-            Log.e("AndroidBleClient", msg)
-            close(SecurityException(msg))
+            close(SecurityException("Missing permission for BLE scan"))
             return@callbackFlow
         }
-
         if (!isBtOn) {
-            Log.e("AndroidBleClient", "Bluetooth is OFF")
             close(IllegalStateException("Bluetooth disabled"))
             return@callbackFlow
         }
 
         val s = scanner
         if (s == null) {
-            Log.e("AndroidBleClient", "scanner is null (adapter=$adapter)")
             close(IllegalStateException("Scanner unavailable"))
             return@callbackFlow
         }
+
+        // --- 필터/세팅 구성 ---
+        val filters = buildList {
+            serviceUuid?.let { add(ScanFilter.Builder().setServiceUuid(ParcelUuid(it)).build()) }
+        }
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
 
         val cb = object : ScanCallback() {
             @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -88,7 +94,6 @@ class AndroidBleClient(
                     trySend(dev)
                 }
             }
-
             override fun onScanFailed(errorCode: Int) {
                 Log.e("AndroidBleClient", "onScanFailed: code=$errorCode")
                 close(IllegalStateException("Scan failed: code=$errorCode"))
@@ -96,14 +101,14 @@ class AndroidBleClient(
         }
 
         try {
-            Log.d("AndroidBleClient", "startScan()")
-            s.startScan(cb)
+            Log.d("AndroidBleClient", "startScan(filters=${filters.size})")
+            if (filters.isEmpty()) s.startScan(cb) else s.startScan(filters, settings, cb)
         } catch (se: SecurityException) {
             Log.e("AndroidBleClient", "startScan() SecurityException: ${se.message}", se)
             close(se)
             return@callbackFlow
         } catch (t: Throwable) {
-            Log.e("AndroidBleClient", "startScan() Throwable: ${t.message}", t)
+            Log.e("AndroidBleClient", "startScan Throwable", t)
             close(t)
             return@callbackFlow
         }

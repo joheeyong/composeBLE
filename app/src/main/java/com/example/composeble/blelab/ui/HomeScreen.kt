@@ -2,18 +2,18 @@ package com.example.composeble.blelab.ui
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.content.Context
 import android.content.Intent
+import android.location.LocationManager
 import android.os.Build
+import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -22,21 +22,29 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.example.composeble.blelab.ui.ScanViewModel
+
+private fun isBluetoothEnabled(): Boolean =
+    BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
+
+private fun isLocationEnabled(ctx: Context): Boolean {
+    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    return try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) lm.isLocationEnabled
+        else lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    } catch (_: Throwable) { false }
+}
 
 @Composable
 fun HomeScreen() {
     val ctx = LocalContext.current
     val vm: ScanViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer { ScanViewModel(ctx.applicationContext) }
-        }
+        factory = viewModelFactory { initializer { ScanViewModel(ctx.applicationContext) } }
     )
     val state by vm.state.collectAsState()
 
-    // 권한 런처
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         val hasScan = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
             (result[Manifest.permission.BLUETOOTH_SCAN] == true) else false
@@ -45,27 +53,23 @@ fun HomeScreen() {
         val hasLoc = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S)
             (result[Manifest.permission.ACCESS_FINE_LOCATION] == true) else true
 
+        Log.d("HomeScreen", "perm result: scan=$hasScan, connect=$hasConnect, loc=$hasLoc")
         vm.evaluatePermissions(hasScan, hasConnect, hasLoc)
     }
 
-    // 블루투스 활성 요청 런처
     val enableBtLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* 사용자가 켰다면 버튼 다시 눌러 스캔 */ }
+    ) { Log.d("HomeScreen", "ACTION_REQUEST_ENABLE result=$it") }
 
-    fun isBluetoothEnabled(): Boolean =
-        BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
+    val openLocationSettings = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { Log.d("HomeScreen", "LOCATION_SETTINGS result=$it") }
 
-    // 최초 진입 시 권한 요청
     LaunchedEffect(Unit) {
-        val perms = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            perms += Manifest.permission.BLUETOOTH_SCAN
-            perms += Manifest.permission.BLUETOOTH_CONNECT
-        } else {
-            perms += Manifest.permission.ACCESS_FINE_LOCATION
-        }
-        permissionLauncher.launch(perms.toTypedArray())
+        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        permissionLauncher.launch(perms)
     }
 
     Column(
@@ -74,30 +78,71 @@ fun HomeScreen() {
     ) {
         Text("BLE 스캔", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
 
+        // 필터 & 타임아웃
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = state.serviceUuidText,
+                    onValueChange = vm::onServiceUuidTextChanged,
+                    label = { Text("Service UUID (예: 0000180D-0000-1000-8000-00805F9B34FB)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("타임아웃(초)")
+                    var expanded by remember { mutableStateOf(false) }
+                    Box {
+                        Button(onClick = { expanded = true }) { Text("${state.timeoutSec}s") }
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            listOf(5, 10, 15, 30, 60).forEach { s ->
+                                DropdownMenuItem(
+                                    text = { Text("$s s") },
+                                    onClick = {
+                                        vm.onTimeoutChanged(s)
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val btOn = isBluetoothEnabled()
+                val locOn = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) isLocationEnabled(ctx) else true
 
-                if (state.missingPermissions.isEmpty()) {
-                    Text("권한 상태: OK")
-                } else {
-                    Text("권한 필요: ${state.missingPermissions.joinToString()}")
-                    Button(onClick = {
-                        permissionLauncher.launch(state.missingPermissions.toTypedArray())
-                    }) { Text("권한 요청") }
+                Text("권한: ${if (state.missingPermissions.isEmpty()) "OK" else state.missingPermissions.joinToString()}")
+                Text("BT: ${if (btOn) "ON" else "OFF"}")
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) {
+                    Text("Location(<=R): ${if (locOn) "ON" else "OFF"}")
                 }
+                state.error?.let { Text("에러: $it", color = MaterialTheme.colorScheme.error) }
 
-                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = {
+                        if (state.missingPermissions.isNotEmpty()) {
+                            permissionLauncher.launch(state.missingPermissions.toTypedArray())
+                        }
+                    }) { Text("권한 요청") }
 
-                Button(
-                    enabled = state.missingPermissions.isEmpty(),
-                    onClick = {
-                        if (!isBluetoothEnabled()) {
+                    Button(onClick = {
+                        if (!btOn) {
                             enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
                         } else {
                             vm.toggleScan()
                         }
-                    }
-                ) { Text(if (state.isScanning) "스캔 중지" else "스캔 시작") }
+                    }) { Text(if (state.isScanning) "스캔 중지" else "스캔 시작") }
+                }
+
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R && !locOn) {
+                    Button(onClick = {
+                        openLocationSettings.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    }) { Text("위치 설정 열기 (<=R)") }
+                }
             }
         }
 
@@ -108,10 +153,7 @@ fun HomeScreen() {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(state.devices) { d ->
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth()
-                        .clickable(enabled = false) { /* 다음 커밋에서 연결 */ }
-                ) {
+                ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Text(d.name ?: "(이름 없음)")
                         Text(d.address ?: "(주소 없음)")
