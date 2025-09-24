@@ -22,7 +22,10 @@ data class ScanUiState(
     val missingPermissions: List<String> = emptyList(),
     val error: String? = null,
     val serviceUuidText: String = "",
-    val timeoutSec: Int = 10
+    val timeoutSec: Int = 10,
+    val connectingAddress: String? = null,
+    val connectedAddress: String? = null,
+    val servicesDiscovered: Boolean = false
 )
 
 class ScanViewModel(
@@ -36,6 +39,40 @@ class ScanViewModel(
 
     private var scanJob: Job? = null
     private var timeoutJob: Job? = null
+    private var connCollectJob: Job? = null
+
+    init {
+        // 연결 상태 수집
+        connCollectJob = viewModelScope.launch {
+            ble.connectionState().collectLatest { cs ->
+                when (cs) {
+                    is BleClient.ConnectionState.Disconnected -> {
+                        _state.value = _state.value.copy(
+                            connectingAddress = null,
+                            connectedAddress = null,
+                            servicesDiscovered = false
+                        )
+                    }
+                    is BleClient.ConnectionState.Connecting -> {
+                        // 유지
+                    }
+                    is BleClient.ConnectionState.Connected -> {
+                        _state.value = _state.value.copy(
+                            connectingAddress = null,
+                            connectedAddress = cs.address,
+                            servicesDiscovered = cs.servicesDiscovered
+                        )
+                    }
+                    is BleClient.ConnectionState.Error -> {
+                        _state.value = _state.value.copy(
+                            connectingAddress = null,
+                            error = cs.message
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     fun onServiceUuidTextChanged(text: String) {
         _state.value = _state.value.copy(serviceUuidText = text)
@@ -57,7 +94,6 @@ class ScanViewModel(
         } else {
             if (!hasLocationLegacy) need += Manifest.permission.ACCESS_FINE_LOCATION
         }
-        Log.d("ScanViewModel", "evaluatePermissions: missing=$need")
         _state.value = _state.value.copy(missingPermissions = need)
     }
 
@@ -66,18 +102,13 @@ class ScanViewModel(
     }
 
     private fun parseServiceUuidOrNull(text: String): UUID? {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return null
-        return try {
-            UUID.fromString(trimmed)
-        } catch (_: Throwable) {
-            null
-        }
+        val t = text.trim()
+        if (t.isEmpty()) return null
+        return runCatching { UUID.fromString(t) }.getOrNull()
     }
 
     private fun startScan() {
         if (_state.value.missingPermissions.isNotEmpty()) {
-            Log.e("ScanViewModel", "startScan blocked: missing=${_state.value.missingPermissions}")
             _state.value = _state.value.copy(error = "권한 필요: ${_state.value.missingPermissions.joinToString()}")
             return
         }
@@ -91,7 +122,6 @@ class ScanViewModel(
 
         _state.value = _state.value.copy(isScanning = true, devices = emptyList(), error = null)
 
-        // 스캔 수집
         scanJob = viewModelScope.launch {
             val latestByAddress = LinkedHashMap<String?, BleClient.Device>()
             try {
@@ -106,20 +136,15 @@ class ScanViewModel(
                     }
                 }
             } catch (t: Throwable) {
-                Log.e("ScanViewModel", "scan error: ${t.message}", t)
                 _state.value = _state.value.copy(isScanning = false, error = t.message)
             }
         }
 
-        // 타임아웃
         timeoutJob?.cancel()
         timeoutJob = viewModelScope.launch {
             val sec = _state.value.timeoutSec
             delay(sec * 1000L)
-            if (_state.value.isScanning) {
-                Log.d("ScanViewModel", "scan timeout after ${sec}s")
-                stopScan()
-            }
+            if (_state.value.isScanning) stopScan()
         }
     }
 
@@ -129,11 +154,42 @@ class ScanViewModel(
         timeoutJob?.cancel()
         timeoutJob = null
         _state.value = _state.value.copy(isScanning = false)
-        Log.d("ScanViewModel", "stopScan()")
+    }
+
+    fun onDeviceClicked(address: String?) {
+        val addr = address ?: return
+        val connected = state.value.connectedAddress
+        if (connected == addr) {
+            disconnect()
+        } else {
+            connect(addr)
+        }
+    }
+
+    private fun connect(address: String) {
+        // 연결 전 스캔 중지
+        if (_state.value.isScanning) stopScan()
+        _state.value = _state.value.copy(connectingAddress = address, error = null)
+        viewModelScope.launch {
+            val res = ble.connect(address)
+            if (res.isFailure) {
+                _state.value = _state.value.copy(connectingAddress = null, error = res.exceptionOrNull()?.message)
+            }
+        }
+    }
+
+    private fun disconnect() {
+        viewModelScope.launch {
+            val res = ble.disconnect()
+            if (res.isFailure) {
+                _state.value = _state.value.copy(error = res.exceptionOrNull()?.message)
+            }
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
         stopScan()
+        connCollectJob?.cancel()
     }
 }
