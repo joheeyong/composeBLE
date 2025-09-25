@@ -53,9 +53,11 @@ class ScanViewModel(
                             servicesDiscovered = false
                         )
                     }
+
                     is BleClient.ConnectionState.Connecting -> {
                         // 유지
                     }
+
                     is BleClient.ConnectionState.Connected -> {
                         _state.value = _state.value.copy(
                             connectingAddress = null,
@@ -63,6 +65,7 @@ class ScanViewModel(
                             servicesDiscovered = cs.servicesDiscovered
                         )
                     }
+
                     is BleClient.ConnectionState.Error -> {
                         _state.value = _state.value.copy(
                             connectingAddress = null,
@@ -109,7 +112,8 @@ class ScanViewModel(
 
     private fun startScan() {
         if (_state.value.missingPermissions.isNotEmpty()) {
-            _state.value = _state.value.copy(error = "권한 필요: ${_state.value.missingPermissions.joinToString()}")
+            _state.value =
+                _state.value.copy(error = "권한 필요: ${_state.value.missingPermissions.joinToString()}")
             return
         }
         if (_state.value.isScanning) return
@@ -173,7 +177,10 @@ class ScanViewModel(
         viewModelScope.launch {
             val res = ble.connect(address)
             if (res.isFailure) {
-                _state.value = _state.value.copy(connectingAddress = null, error = res.exceptionOrNull()?.message)
+                _state.value = _state.value.copy(
+                    connectingAddress = null,
+                    error = res.exceptionOrNull()?.message
+                )
             }
         }
     }

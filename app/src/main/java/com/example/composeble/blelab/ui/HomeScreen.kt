@@ -32,17 +32,28 @@ private fun isLocationEnabled(ctx: Context): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) lm.isLocationEnabled
         else lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
                 lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-    } catch (_: Throwable) { false }
+    } catch (_: Throwable) {
+        false
+    }
 }
 
+/**
+ * 홈 스크린.
+ * - 스캔 시작/중지
+ * - 연결/해제
+ * - 연결된 경우 "서비스 보기" 버튼으로 상세 화면 이동 (navToDetail)
+ */
 @Composable
-fun HomeScreen() {
+fun HomeScreen(
+    navToDetail: (String) -> Unit
+) {
     val ctx = LocalContext.current
     val vm: ScanViewModel = viewModel(
         factory = viewModelFactory { initializer { ScanViewModel(ctx.applicationContext) } }
     )
     val state by vm.state.collectAsState()
 
+    // 권한 런처
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -55,14 +66,17 @@ fun HomeScreen() {
         vm.evaluatePermissions(hasScan, hasConnect, hasLoc)
     }
 
+    // 블루투스 활성화 요청 런처
     val enableBtLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {}
 
+    // (API 30 이하) 위치 설정 열기 런처
     val openLocationSettings = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {}
 
+    // 최초 권한 요청
     LaunchedEffect(Unit) {
         val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
@@ -71,18 +85,23 @@ fun HomeScreen() {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("BLE 스캔/연결", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            "BLE 스캔/연결",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold
+        )
 
-        // 필터/타임아웃 카드 (Commit #3에서 추가된 내용 그대로 사용)
-        // ... (생략하고 사용 중이라면 유지)
-
+        // 권한/상태/액션 카드
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val btOn = isBluetoothEnabled()
-                val locOn = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) isLocationEnabled(ctx) else true
+                val locOn =
+                    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) isLocationEnabled(ctx) else true
 
                 Text("권한: ${if (state.missingPermissions.isEmpty()) "OK" else state.missingPermissions.joinToString()}")
                 Text("BT: ${if (btOn) "ON" else "OFF"}")
@@ -104,23 +123,26 @@ fun HomeScreen() {
                         } else {
                             vm.toggleScan()
                         }
-                    }) { Text(if (state.isScanning) "스캔 중지" else "스캔 시작") }
+                    }) {
+                        Text(if (state.isScanning) "스캔 중지" else "스캔 시작")
+                    }
                 }
 
-                // 연결 상태 표시
+                // 연결 상태 표시 + 서비스 보기
                 val conn = state.connectedAddress
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (state.connectingAddress != null) {
                         AssistChip(
                             onClick = { },
-                            label = { Text("연결 중: ${state.connectingAddress}") }
-                        )
+                            label = { Text("연결 중: ${state.connectingAddress}") })
                     }
                     if (conn != null) {
                         AssistChip(
                             onClick = { },
                             label = { Text("연결됨: $conn${if (state.servicesDiscovered) " (Services)" else ""}") }
                         )
+                        // 연결된 경우: 서비스 보기
+                        Button(onClick = { navToDetail(conn) }) { Text("서비스 보기") }
                     }
                 }
 
@@ -134,6 +156,7 @@ fun HomeScreen() {
 
         Text("디바이스 (${state.devices.size})", fontWeight = FontWeight.Medium)
 
+        // 스캔 결과 리스트
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -146,9 +169,7 @@ fun HomeScreen() {
                 ElevatedCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            vm.onDeviceClicked(addr)
-                        }
+                        .clickable { vm.onDeviceClicked(addr) }
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -163,7 +184,10 @@ fun HomeScreen() {
                         Text("RSSI: ${d.rssi ?: "?"}")
                         if (isConnected) {
                             Spacer(Modifier.height(6.dp))
-                            Button(onClick = { vm.onDeviceClicked(addr) }) { Text("연결 해제") }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { vm.onDeviceClicked(addr) }) { Text("연결 해제") }
+                                Button(onClick = { navToDetail(addr) }) { Text("서비스 보기") }
+                            }
                         }
                     }
                 }
