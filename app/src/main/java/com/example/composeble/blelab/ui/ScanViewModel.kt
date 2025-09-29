@@ -12,8 +12,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import android.content.Context
-import com.example.composeble.blelab.ble.AndroidBleClient
+import com.example.composeble.ble.AndroidBleClient
 import com.example.composeble.blelab.ble.BleClient
+import com.example.composeble.blelab.ble.BleClients
 import java.util.UUID
 
 data class ScanUiState(
@@ -27,6 +28,8 @@ data class ScanUiState(
     val connectedAddress: String? = null,
     val servicesDiscovered: Boolean = false
 )
+
+
 
 class ScanViewModel(
     private val context: Context
@@ -42,6 +45,9 @@ class ScanViewModel(
     private var connCollectJob: Job? = null
 
     init {
+        // 연결 컨텍스트 공유 (상세 화면에서 같은 GATT 사용)
+        BleClients.shared = ble
+
         // 연결 상태 수집
         connCollectJob = viewModelScope.launch {
             ble.connectionState().collectLatest { cs ->
