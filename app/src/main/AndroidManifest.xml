@@ -18,6 +18,18 @@
     <!-- 권장 -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>
 
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 기본 포그라운드 서비스 권한 (API 28+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Android 14+ (targetSdk 34+)에선 타입별 권한도 필요 -->
+    <!-- 블루투스 연결 유지 목적이므로 CONNECTED_DEVICE 타입을 추가 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- (선택) 알림 표시용 — 알림이 안 보이면 사용자가 허용해야 함 (API 33+) -->
+    <!-- <uses-permission android:name="android.permission.POST_NOTIFICATIONS" /> -->
+
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -38,6 +50,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".blelab.ble.BleForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 
 </manifest>

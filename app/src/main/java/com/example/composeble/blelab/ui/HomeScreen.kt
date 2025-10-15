@@ -1,6 +1,7 @@
 package com.example.composeble.blelab.ui
 
 import android.Manifest
+import android.app.NotificationManager
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
@@ -9,19 +10,24 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.composeble.blelab.ble.BleClients
+import com.example.composeble.blelab.ble.BleForegroundService
 
 private fun isBluetoothEnabled(): Boolean =
     BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
@@ -42,7 +48,9 @@ private fun isLocationEnabled(ctx: Context): Boolean {
  * - 스캔 시작/중지
  * - 연결/해제
  * - 연결된 경우 "서비스 보기" 버튼으로 상세 화면 이동 (navToDetail)
+ * - 백그라운드 연결 유지(포그라운드 서비스) + 자동 재연결 토글
  */
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun HomeScreen(
     navToDetail: (String) -> Unit
@@ -53,7 +61,7 @@ fun HomeScreen(
     )
     val state by vm.state.collectAsState()
 
-    // 권한 런처
+    // --- 권한 런처들 ---
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -66,15 +74,18 @@ fun HomeScreen(
         vm.evaluatePermissions(hasScan, hasConnect, hasLoc)
     }
 
-    // 블루투스 활성화 요청 런처
     val enableBtLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {}
 
-    // (API 30 이하) 위치 설정 열기 런처
     val openLocationSettings = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {}
+
+    // Android 13+ 알림 권한
+    val requestPostNotifications = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* granted/denied는 알림 표시 여부에만 영향 */ }
 
     // 최초 권한 요청
     LaunchedEffect(Unit) {
@@ -83,6 +94,9 @@ fun HomeScreen(
         else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         permissionLauncher.launch(perms)
     }
+
+    // 백그라운드 유지 토글 상태 (저장 가능)
+    var keepBg by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -150,6 +164,41 @@ fun HomeScreen(
                     Button(onClick = {
                         openLocationSettings.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
                     }) { Text("위치 설정 열기 (<=R)") }
+                }
+
+                // --- 백그라운드 연결 유지 토글 ---
+                Divider(Modifier.padding(top = 8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("백그라운드 연결 유지", fontWeight = FontWeight.Medium)
+                        Text(
+                            "앱을 닫아도 연결을 유지하고 끊기면 자동 재연결합니다.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = keepBg,
+                        onCheckedChange = { on ->
+                            keepBg = on
+                            BleClients.autoReconnect = on
+
+                            // Android 13+에서 알림 권한 필요(알림 표시용)
+                            if (on && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                val nm = NotificationManagerCompat.from(ctx)
+                                val has = nm.areNotificationsEnabled()
+                                if (!has) {
+                                    requestPostNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            }
+
+                            val action = if (on) BleForegroundService.ACTION_START else BleForegroundService.ACTION_STOP
+                            val intent = Intent(ctx, BleForegroundService::class.java).setAction(action)
+                            if (on) ctx.startForegroundService(intent) else ctx.startService(intent)
+                        }
+                    )
                 }
             }
         }
