@@ -28,6 +28,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.composeble.blelab.ble.BleClients
 import com.example.composeble.blelab.ble.BleForegroundService
+import com.example.composeble.blelab.data.SettingsRepository
 
 private fun isBluetoothEnabled(): Boolean =
     BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
@@ -89,10 +90,27 @@ fun HomeScreen(
 
     // 최초 권한 요청
     LaunchedEffect(Unit) {
+
+
         val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         permissionLauncher.launch(perms)
+
+// ↓↓↓ 추가: 저장된 기본값을 ViewModel/FGS에 반영
+        val repo = SettingsRepository(ctx.applicationContext)
+        repo.getServiceUuid()?.let { vm.onServiceUuidTextChanged(it) }
+        vm.onTimeoutChanged(repo.getTimeoutSec())
+
+        val auto = repo.getAutoReconnect()
+        BleClients.autoReconnect = auto
+// 홈 스위치 UI를 따로 두지 않았다면, 자동 재연결을 켜둘 때 즉시 서비스 시작
+        if (auto) {
+            val intent = Intent(ctx, BleForegroundService::class.java)
+                .setAction(BleForegroundService.ACTION_START)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(intent)
+            else ctx.startService(intent)
+        }
     }
 
     // 백그라운드 유지 토글 상태 (저장 가능)
