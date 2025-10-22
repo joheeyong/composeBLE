@@ -13,10 +13,12 @@ import java.util.UUID
 data class DeviceDetailState(
     val services: List<BleClient.GattService> = emptyList(),
     val error: String? = null,
-    // 알림/읽기 결과 표시용
     val lastValuesHex: Map<Pair<UUID, UUID>, String> = emptyMap(),
-    val notifying: Set<Pair<UUID, UUID>> = emptySet()
+    val notifying: Set<Pair<UUID, UUID>> = emptySet(),
+    val busyKeys: Set<Pair<UUID, UUID>> = emptySet(),
+    val snackbarMessage: String? = null
 )
+
 
 class DeviceDetailViewModel(
     context: Context,
@@ -49,45 +51,63 @@ class DeviceDetailViewModel(
         }
     }
 
+    private fun setBusy(key: Pair<UUID, UUID>, busy: Boolean) {
+        _state.update { s ->
+            val set = s.busyKeys.toMutableSet()
+            if (busy) set += key else set -= key
+            s.copy(busyKeys = set)
+        }
+    }
+
     fun onRead(service: UUID, char: UUID) {
+        val key = service to char
+        setBusy(key, true)
         viewModelScope.launch {
             val res = ble.read(service, char)
             if (res.isSuccess) {
                 val bytes = res.getOrDefault(ByteArray(0))
                 val hex = bytes.joinToString("") { "%02X".format(it) }
-                val key = service to char
-                _state.update { s -> s.copy(lastValuesHex = s.lastValuesHex + (key to hex), error = null) }
+                _state.update { s -> s.copy(lastValuesHex = s.lastValuesHex + (key to hex), snackbarMessage = "Read OK") }
             } else {
-                _state.update { it.copy(error = res.exceptionOrNull()?.message) }
+                _state.update { it.copy(error = res.exceptionOrNull()?.message ?: "Read failed") }
             }
+            setBusy(key, false)
         }
     }
 
+
+
     fun onToggleNotify(service: UUID, char: UUID, enable: Boolean) {
+        val key = service to char
+        setBusy(key, true)
         viewModelScope.launch {
             val res = ble.setNotify(service, char, enable)
-            val key = service to char
             if (res.isSuccess) {
                 _state.update { s ->
                     val set = s.notifying.toMutableSet()
                     if (enable) set += key else set -= key
-                    s.copy(notifying = set, error = null)
+                    s.copy(notifying = set, snackbarMessage = if (enable) "Notify On" else "Notify Off")
                 }
             } else {
-                _state.update { it.copy(error = res.exceptionOrNull()?.message) }
+                _state.update { it.copy(error = res.exceptionOrNull()?.message ?: "Notify failed") }
             }
+            setBusy(key, false)
         }
     }
 
     fun onWrite(service: UUID, char: UUID, hex: String, writeNoResp: Boolean) {
+        val key = service to char
         val bytes = hexToBytesOrNull(hex) ?: run {
             _state.update { it.copy(error = "Hex 형식이 올바르지 않습니다.") }
             return
         }
+        setBusy(key, true)
         viewModelScope.launch {
             val type = if (writeNoResp) BleClient.WriteType.NO_RESPONSE else BleClient.WriteType.DEFAULT
             val res = ble.write(service, char, bytes, type)
-            if (res.isFailure) _state.update { it.copy(error = res.exceptionOrNull()?.message) }
+            if (res.isSuccess) _state.update { it.copy(snackbarMessage = "Write OK (${bytes.size}B)") }
+            else _state.update { it.copy(error = res.exceptionOrNull()?.message ?: "Write failed") }
+            setBusy(key, false)
         }
     }
 
@@ -100,4 +120,6 @@ class DeviceDetailViewModel(
             }
         }.getOrNull()
     }
+
+    fun consumeSnackbar() { _state.update { it.copy(snackbarMessage = null) } }
 }
